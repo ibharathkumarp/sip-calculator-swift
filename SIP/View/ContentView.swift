@@ -8,6 +8,7 @@
 import SwiftUI
 import CoreData
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @EnvironmentObject var settingsViewModel: SettingViewModel
@@ -25,6 +26,7 @@ struct ContentView: View {
     @State private var showSetting = false
     @State private var isBookmarkFilled = false
     @GestureState private var isPressing = false
+    @State private var yearlyIncreasePercentage: Double = 0
     
     var body: some View {
         NavigationView {
@@ -132,7 +134,7 @@ struct ContentView: View {
                     UIRefreshControl.appearance().tintColor = Color.appTheme.uiColor()
                     UIRefreshControl.appearance().attributedTitle = try? NSAttributedString(markdown: "Pull down to save")
                 }
-
+                
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -195,7 +197,7 @@ struct ContentView: View {
         }
     }
     
-    func calculateSIP() {
+    private func calculateSIP() {
         isBookmarkFilled = false
         guard let amount = Double(monthlyInvestment), period > 0, rateOfReturn > 0 else {
             actualAmount = 0
@@ -207,80 +209,102 @@ struct ContentView: View {
         let periodMonthly = Double(period) * 12.0
         let rateOfReturnMonthly = rateOfReturn / 12.0 / 100.0
         
-        actualAmount = amount * periodMonthly
+        // Calculate the future amount considering the yearly increase percentage
+        let futureAmount = futureSipValue(rateOfReturnMonthly, nper: periodMonthly, pmt: amount, yearlyIncreasePercentage: yearlyIncreasePercentage)
         
-        let futureAmount = futureSipValue(rateOfReturnMonthly, nper: periodMonthly, pmt: amount)
+        actualAmount = calculateActualAmount(initialInvestment: amount, period: Int(period), yearlyIncreasePercentage: yearlyIncreasePercentage)
         netReturn = futureAmount - actualAmount
         timesRolledOver = actualAmount == 0 ? 0 : futureAmount / actualAmount
     }
     
-    func futureSipValue(_ rate: Double, nper: Double, pmt: Double) -> Double {
-        let futureValue = pmt * ((pow(1 + rate, nper) - 1) / rate) * (1 + rate)
+    private func futureSipValue(_ rate: Double, nper: Double, pmt: Double, yearlyIncreasePercentage: Double) -> Double {
+        var futureValue = 0.0
+        var currentInvestment = pmt
+        
+        // Loop through each month, adjusting the monthly payment each year
+        for month in 1...Int(nper) {
+            if month % 12 == 1 && month > 1 {
+                currentInvestment *= (1 + yearlyIncreasePercentage / 100)
+            }
+            futureValue += currentInvestment * pow(1 + rate, nper - Double(month))
+        }
+        
         return futureValue
     }
+    private func calculateActualAmount(initialInvestment: Double, period: Int, yearlyIncreasePercentage: Double) -> Double {
+        var totalAmount = 0.0
+        var currentInvestment = initialInvestment
+        
+        for year in 1...period {
+            totalAmount += currentInvestment * 12 // Total for the year
+            currentInvestment *= (1 + yearlyIncreasePercentage / 100) // Increase yearly
+        }
+        
+        return totalAmount
+    }
     
-}
-
-struct StatisticBoxView: View {
-    var title: String
-    var value: String
-    var isAmount: Bool
     
-    private func formattedValue() -> String {
-        if isAmount {
-            let formatter = NumberFormatter()
-            formatter.numberStyle = .currency
-            formatter.currencySymbol = Locale.current.currencySymbol ?? "$"
-            return formatter.string(from: NSNumber(value: max(Int(value) ?? 0, 0))) ?? "$0"
-        } else {
-            return "\(max(Int(value) ?? 0, 0))"
+    
+    struct StatisticBoxView: View {
+        var title: String
+        var value: String
+        var isAmount: Bool
+        
+        private func formattedValue() -> String {
+            if isAmount {
+                let formatter = NumberFormatter()
+                formatter.numberStyle = .currency
+                formatter.currencySymbol = Locale.current.currencySymbol ?? "$"
+                return formatter.string(from: NSNumber(value: max(Int(value) ?? 0, 0))) ?? "$0"
+            } else {
+                return "\(max(Int(value) ?? 0, 0))"
+            }
+        }
+        
+        var body: some View {
+            VStack (spacing: 5) {
+                Text(formattedValue())
+                    .minimumScaleFactor(0.1)
+                    .lineLimit(1)
+                    .font(.title)
+                    .fontWeight(.bold)
+                    .frame(height: 30)
+                
+                Text(title)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(height: 20)
+            }
+            .frame(minWidth: 0, maxWidth: .infinity)
+            .frame(height: 60)
+            .cornerRadius(10)
+            .shadow(color: Color.primary.opacity(0.1), radius: 1, x: 0, y: 1)
         }
     }
     
-    var body: some View {
-        VStack (spacing: 5) {
-            Text(formattedValue())
-                .minimumScaleFactor(0.1)
-                .lineLimit(1)
-                .font(.title)
-                .fontWeight(.bold)
-                .frame(height: 30)
-            
-            Text(title)
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .frame(height: 20)
+   
+ 
+    
+    struct ContentView_Previews: PreviewProvider {
+        static var previews: some View {
+            ContentView().environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
         }
-        .frame(minWidth: 0, maxWidth: .infinity)
-        .frame(height: 60)
-        .cornerRadius(10)
-        .shadow(color: Color.primary.opacity(0.1), radius: 1, x: 0, y: 1)
+    }
+}
+struct TouchToDismissKeyboard: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .gesture(
+                TapGesture()
+                    .onEnded { _ in
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
+            )
     }
 }
 
 extension View {
     func touchToDismissKeyboard() -> some View {
-        return modifier(TouchToDismissKeyboard())
-    }
-}
-
-struct TouchToDismissKeyboard: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .onTapGesture {
-                let keyWindow = UIApplication.shared.connectedScenes
-                    .filter({$0.activationState == .foregroundActive})
-                    .map({$0 as? UIWindowScene})
-                    .compactMap({$0})
-                    .first?.windows
-                    .filter({$0.isKeyWindow}).first
-                keyWindow?.endEditing(true)
-            }
-    }
-}
-
-struct ContentView_Previews: PreviewProvider {
-    static var previews: some View {
-        ContentView().environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
+        modifier(TouchToDismissKeyboard())
     }
 }
